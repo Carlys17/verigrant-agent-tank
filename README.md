@@ -126,6 +126,12 @@ genlayer deploy --contract contracts/VeriGrant_flat.py
 Or paste `contracts/VeriGrant_flat.py` into [GenLayer Studio](https://studio.genlayer.com/)
 and deploy from the browser IDE.
 
+**Current deployment (studionet):**
+`0xc64a0C81e434c76FEb2DB244681a717556A11097`
+([explorer](https://explorer-studio.genlayer.com/address/0xc64a0C81e434c76FEb2DB244681a717556A11097))
+— deployed from `contracts/VeriGrant_flat.py` at commit `71b28cc`, source
+hash-verified identical to this repo.
+
 ## Security notes
 
 - The validator never trusts the leader; it re-fetches and re-judges.
