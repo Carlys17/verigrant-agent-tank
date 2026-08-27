@@ -31,13 +31,24 @@ Built for the GenLayer Points program — **Intelligent Contracts** category
 ## What it does
 
 1. `create_grant(grant_id, total_budget)` — a granter registers a grant.
-2. `submit_milestone(grant_id, target_criteria, evidence_url, predicted_points)`
-   — a contributor submits milestone evidence against stated criteria.
-3. `resolve_milestone(midpoint)` — a reviewer triggers live evidence fetch +
-   LLM judgement under the Equivalence Principle. On consensus acceptance the
-   milestone is marked `accepted` and welfare is recorded; otherwise
-   `rejected`.
-4. Views: `get_stats`, `get_milestones_by_submitter`, `get_welfare_state`.
+   The grant's unambiguous identity is the composite key
+   `{owner}_{grant_id}`; the owner is automatically contributor and
+   reviewer of their own grant.
+2. `add_contributor(grant_id, address)` / `add_reviewer(grant_id, address)`
+   — owner-only role registration.
+3. `submit_milestone(grant_owner, grant_id, target_criteria, evidence_url, predicted_points)`
+   — a registered contributor submits milestone evidence against stated
+   criteria. The milestone stores the exact composite grant key, so it can
+   never be associated with an unrelated same-named grant.
+4. `resolve_milestone(submitter, midpoint)` — a registered reviewer (never
+   the submitter) triggers live evidence fetch + LLM judgement under the
+   Equivalence Principle. On consensus acceptance the milestone is marked
+   `accepted`, the referenced grant's `welfare_distributed` flag is set and
+   the welfare ledger (keyed by the same composite grant key) is released;
+   otherwise `rejected`.
+5. Views: `get_stats`, `get_milestones_by_submitter`,
+   `get_welfare_state(owner, grant_id)`, `get_grant(owner, grant_id)`,
+   `get_roles(owner, grant_id)`.
 
 ## Consensus flow
 
@@ -90,15 +101,19 @@ Direct mode runs the contract in-memory with mocked web/LLM responses:
 | `test_create_grant_and_view` | grant creation + stats |
 | `test_submit_requires_existing_grant` | revert on unknown grant |
 | `test_submit_rejects_bad_url` | URL validation |
-| `test_accept_milestone_awards_welfare` | accepted → welfare distributed |
+| `test_submit_requires_contributor_role` | contributor permission enforced |
+| `test_same_name_grant_isolation` | same-named grants from different owners stay distinct |
+| `test_accept_milestone_awards_welfare` | accepted → grant welfare flag + ledger released |
 | `test_reject_milestone_no_welfare` | rejected → welfare stays locked |
+| `test_submitter_cannot_self_resolve` | no self-resolution |
+| `test_resolve_requires_reviewer_role` | reviewer permission enforced |
 | `test_validator_rejects_on_disagreement` | validator independently disagrees |
 | `test_cannot_resolve_twice` | idempotency guard |
 | `test_destroy_grant` | grant teardown |
 
 ```
 $ pytest tests/direct/ -q
-51 passed in 2.06s
+12 passed in 1.08s
 ```
 
 ## Deploying

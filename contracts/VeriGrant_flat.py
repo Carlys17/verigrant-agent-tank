@@ -18,7 +18,7 @@ class Grant:
 @dataclass
 class Milestone:
     id: str
-    grant_id: str
+    grant_key: str
     submitter: Address
     target_criteria: str
     evidence_url: str
@@ -37,15 +37,49 @@ class VeriGrant(gl.Contract):
     web-fetch + LLM judgement that is agreed by validator consensus through
     the GenLayer Equivalence Principle, then the milestone is marked
     accepted/rejected and welfare is released only on acceptance.
+
+    Identity & permissions (steward feedback, Aug 2026):
+    - Every grant is identified by the composite key ``{owner}_{grant_id}``
+      (owner address + grant id). Milestones reference that exact key, and
+      the same key is used for lookup and welfare state, so a submitter can
+      never associate with an unrelated same-named grant.
+    - The grant owner is automatically contributor and reviewer. Additional
+      contributors/reviewers are registered explicitly by the owner.
+      ``submit_milestone`` requires contributor role; ``resolve_milestone``
+      requires reviewer role and can never be called by the milestone's own
+      submitter (no self-resolution).
+    - On acceptance the referenced grant's ``welfare_distributed`` flag is
+      set and the welfare ledger (keyed by grant key) is updated.
     """
 
     grants: TreeMap[Address, TreeMap[str, Grant]]
     milestones: TreeMap[Address, TreeMap[str, Milestone]]
-    welfare: TreeMap[Address, TreeMap[str, bool]]
+    welfare: TreeMap[str, bool]
+    contributors: TreeMap[str, TreeMap[Address, bool]]
+    reviewers: TreeMap[str, TreeMap[Address, bool]]
     milestone_seq: TreeMap[Address, u256]
 
     def __init__(self) -> None:
         pass
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _grant_key(self, owner: Address, grant_id: str) -> str:
+        """Composite, unambiguous grant identifier: owner + grant id."""
+        return f"{owner.as_hex}_{grant_id}"
+
+    def _get_grant(self, owner: Address, grant_id: str) -> Grant:
+        grants_for_owner = self.grants.get_or_insert_default(owner)
+        if grant_id not in grants_for_owner:
+            raise gl.vm.UserError("Grant not found")
+        return grants_for_owner[grant_id]
+
+    def _is_contributor(self, grant_key: str, addr: Address) -> bool:
+        return self.contributors.get_or_insert_default(grant_key).get(addr, False)
+
+    def _is_reviewer(self, grant_key: str, addr: Address) -> bool:
+        return self.reviewers.get_or_insert_default(grant_key).get(addr, False)
 
     # ------------------------------------------------------------------
     # Views
@@ -80,18 +114,43 @@ class VeriGrant(gl.Contract):
     def get_milestones_by_submitter(self, submitter: str) -> dict:
         addr = Address(submitter)
         return {
-            mid: {"id": m.id, "grant_id": m.grant_id, "status": m.status}
+            mid: {"id": m.id, "grant_key": m.grant_key, "status": m.status}
             for mid, m in self.milestones.get(addr, {}).items()
         }
 
     @gl.public.view
-    def get_welfare_state(self, grant_id: str) -> str:
-        """Return 'distributed' if any accepted milestone exists for the grant."""
-        for _, milestones in self.milestones.items():
-            for _, m in milestones.items():
-                if m.grant_id == grant_id and m.status == "accepted":
-                    return "distributed"
+    def get_welfare_state(self, owner: str, grant_id: str) -> str:
+        """Welfare state of one unambiguous grant (owner + grant id).
+
+        'distributed' if the grant's welfare ledger is released (set when a
+        milestone of that grant is accepted), else 'locked'.
+        """
+        grant_key = self._grant_key(Address(owner), grant_id)
+        if self.welfare.get(grant_key, False):
+            return "distributed"
         return "locked"
+
+    @gl.public.view
+    def get_grant(self, owner: str, grant_id: str) -> dict:
+        grant = self._get_grant(Address(owner), grant_id)
+        return {
+            "id": grant.id,
+            "granter": grant.granter.as_hex,
+            "total_budget": int(grant.total_budget),
+            "welfare_distributed": grant.welfare_distributed,
+        }
+
+    @gl.public.view
+    def get_roles(self, owner: str, grant_id: str) -> dict:
+        grant_key = self._grant_key(Address(owner), grant_id)
+        return {
+            "contributors": [
+                a.as_hex for a, ok in self.contributors.get_or_insert_default(grant_key).items() if ok
+            ],
+            "reviewers": [
+                a.as_hex for a, ok in self.reviewers.get_or_insert_default(grant_key).items() if ok
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Grant management
@@ -105,6 +164,10 @@ class VeriGrant(gl.Contract):
         grants_for_sender[grant_id] = Grant(
             id=grant_id, granter=sender, total_budget=total_budget, welfare_distributed=False
         )
+        # Owner is automatically contributor and reviewer for their grant.
+        grant_key = self._grant_key(sender, grant_id)
+        self.contributors.get_or_insert_default(grant_key)[sender] = True
+        self.reviewers.get_or_insert_default(grant_key)[sender] = True
 
     @gl.public.write
     def destroy_grant(self, grant_id: str) -> None:
@@ -115,11 +178,29 @@ class VeriGrant(gl.Contract):
         del grants_for_sender[grant_id]
 
     # ------------------------------------------------------------------
+    # Role management (owner-only)
+    # ------------------------------------------------------------------
+    @gl.public.write
+    def add_contributor(self, grant_id: str, contributor: str) -> None:
+        sender = gl.message.sender_address
+        self._get_grant(sender, grant_id)  # owner-only: reverts otherwise
+        grant_key = self._grant_key(sender, grant_id)
+        self.contributors.get_or_insert_default(grant_key)[Address(contributor)] = True
+
+    @gl.public.write
+    def add_reviewer(self, grant_id: str, reviewer: str) -> None:
+        sender = gl.message.sender_address
+        self._get_grant(sender, grant_id)  # owner-only: reverts otherwise
+        grant_key = self._grant_key(sender, grant_id)
+        self.reviewers.get_or_insert_default(grant_key)[Address(reviewer)] = True
+
+    # ------------------------------------------------------------------
     # Milestones
     # ------------------------------------------------------------------
     @gl.public.write
     def submit_milestone(
         self,
+        grant_owner: str,
         grant_id: str,
         target_criteria: str,
         evidence_url: str,
@@ -129,22 +210,23 @@ class VeriGrant(gl.Contract):
             raise gl.vm.UserError("Invalid evidence_url: must be an http(s) URL")
         sender = gl.message.sender_address
 
-        grant_found = False
-        for _, grants in self.grants.items():
-            if grant_id in grants:
-                grant_found = True
-                break
-        if not grant_found:
-            raise gl.vm.UserError("Grant does not exist")
+        # Milestone references one unambiguous grant: owner + grant id.
+        owner = Address(grant_owner)
+        grant = self._get_grant(owner, grant_id)
+        grant_key = self._grant_key(owner, grant_id)
+
+        # Contributor permission: submitter must be registered for THIS grant.
+        if not self._is_contributor(grant_key, sender):
+            raise gl.vm.UserError("Not a contributor of this grant")
 
         seq = self.milestone_seq.get_or_insert_default(sender)
         self.milestone_seq[sender] = seq + 1
-        mid = f"{sender}_{seq}"
+        mid = f"{sender.as_hex}_{seq}"
 
         milestones = self.milestones.get_or_insert_default(sender)
         milestones[mid] = Milestone(
             id=mid,
-            grant_id=grant_id,
+            grant_key=grant_key,
             submitter=sender,
             target_criteria=target_criteria,
             evidence_url=evidence_url,
@@ -156,14 +238,23 @@ class VeriGrant(gl.Contract):
     # Equivalence-Principle resolution (web + LLM + consensus)
     # ------------------------------------------------------------------
     @gl.public.write
-    def resolve_milestone(self, midpoint: str) -> dict:
+    def resolve_milestone(self, submitter: str, midpoint: str) -> dict:
         sender = gl.message.sender_address
-        milestones = self.milestones.get_or_insert_default(sender)
+        sub_addr = Address(submitter)
+        milestones = self.milestones.get_or_insert_default(sub_addr)
         if midpoint not in milestones:
-            raise gl.vm.UserError("Milestone not found for sender")
+            raise gl.vm.UserError("Milestone not found")
         ms = milestones[midpoint]
         if ms.status != "pending":
             raise gl.vm.UserError(f"Milestone already resolved: {ms.status}")
+
+        # Reviewer permission: caller must be a registered reviewer of the
+        # grant this milestone references, and can never be the submitter
+        # (no self-resolution).
+        if sender == ms.submitter:
+            raise gl.vm.UserError("Submitter cannot resolve their own milestone")
+        if not self._is_reviewer(ms.grant_key, sender):
+            raise gl.vm.UserError("Not a reviewer of this grant")
 
         # Leader: fetch live evidence and judge it. Both leader and validators
         # run this independently inside the equivalence block.
@@ -173,7 +264,7 @@ class VeriGrant(gl.Contract):
 
 Evaluate whether this milestone evidence satisfies the stated criteria.
 
-Grant ID: {ms.grant_id}
+Grant key: {ms.grant_key}
 Milestone target criteria: "{ms.target_criteria}"
 Evidence URL: {ms.evidence_url}
 Evidence page content (HTML - may be truncated): {web_data[:12000]}
@@ -237,8 +328,15 @@ It is mandatory that you respond ONLY with valid JSON and nothing else.
         milestones[midpoint] = ms
 
         if accepted:
-            welfare = self.welfare.get_or_insert_default(sender)
-            welfare[midpoint] = True
+            # Update the referenced grant's welfare state (same composite
+            # key used for lookup) and record it in the welfare ledger.
+            self.welfare[ms.grant_key] = True
+            owner_hex, _, gid = ms.grant_key.partition("_")
+            grants_for_owner = self.grants.get_or_insert_default(Address(owner_hex))
+            if gid in grants_for_owner:
+                g = grants_for_owner[gid]
+                g.welfare_distributed = True
+                grants_for_owner[gid] = g
 
         return {
             "accepted": accepted,
