@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VeriGrant — Grant Milestone Verification on GenLayer</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--text:#c9d1d9;--muted:#8b949e;--accent:#2f81f7;--accent2:#238636;--border:#30363d}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding:40px 24px}
+header{text-align:center;padding:48px 0 32px;border-bottom:1px solid var(--border)}
+h1{font-size:2.2em;color:#fff;letter-spacing:-0.02em}
+.tag{color:var(--accent);font-size:0.85em;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:8px}
+.sub{color:var(--muted);font-size:1.05em;max-width:560px;margin:12px auto 0}
+section{padding:36px 0;border-bottom:1px solid var(--border)}
+h2{font-size:1.35em;color:#fff;margin-bottom:16px}
+p{margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px}
+.card h3{color:#fff;font-size:1em;margin-bottom:6px}
+.card p{color:var(--muted);font-size:0.9em;margin:0}
+.badge{display:inline-block;background:rgba(47,129,247,0.15);color:var(--accent);border:1px solid rgba(47,129,247,0.4);border-radius:20px;padding:2px 12px;font-size:0.8em;font-weight:600;margin:4px 6px 4px 0}
+.links{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}
+a.btn{display:inline-block;background:var(--accent2);color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;font-size:0.95em}
+a.btn.secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
+code{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:0.85em;color:var(--accent)}
+.flow{counter-reset:step;margin-top:20px}
+.flow div{position:relative;padding:12px 0 12px 44px;border-left:2px solid var(--border);margin-left:12px}
+.flow div::before{counter-increment:step;content:counter(step);position:absolute;left:-14px;top:12px;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:0.75em;font-weight:700}
+footer{text-align:center;color:var(--muted);font-size:0.85em;padding:32px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="tag">GenLayer Intelligent Contract</div>
+<h1>VeriGrant</h1>
+<p class="sub">Grant milestone verification with consensus: contributors submit evidence, an LLM judge and a re-judging validator must agree, and welfare disburses only on agreement.</p>
+<div class="links" style="justify-content:center">
+<a class="btn" href="https://explorer-studio.genlayer.com/address/0xEfd6DbCaeaf869aa03D12630B1DB984544570040">Live contract</a>
+<a class="btn secondary" href="https://github.com/Carlys17/verigrant">GitHub</a>
+</div>
+</header>
+
+<section>
+<h2>The problem</h2>
+<p>Grant programs everywhere share the same bottleneck: a human reviewer must read milestone evidence and decide whether the work meets the criteria before funds are released. That review is slow, subjective, and unauditable — and it is exactly the judgement call an intelligent contract can make instead.</p>
+</section>
+
+<section>
+<h2>How it works</h2>
+<div class="flow">
+<div><strong>A granter creates a grant</strong><br><span style="color:var(--muted)">Registers budget, contributors, and reviewers. The grant's identity is an unambiguous composite key <code>{owner}_{grant_id}</code>.</span></div>
+<div><strong>A contributor submits evidence</strong><br><span style="color:var(--muted)">A milestone with target criteria and a live evidence URL — a repo, doc, or post.</span></div>
+<div><strong>A reviewer triggers resolution</strong><br><span style="color:var(--muted)"><code>resolve_milestone</code> runs a leader function that fetches the evidence from the live web and asks an LLM to judge it against the stated criteria.</span></div>
+<div><strong>The validator re-judges independently</strong><br><span style="color:var(--muted)">Through the Equivalence Principle, validators re-fetch the evidence and re-run the judgement. The decision stands only if leader and validators agree on the binary outcome and stay within confidence tolerance.</span></div>
+<div><strong>Welfare disburses on consensus</strong><br><span style="color:var(--muted)">On agreement, the contract releases the milestone's welfare to the contributor — no human in the loop, every decision onchain and auditable.</span></div>
+</div>
+</section>
+
+<section>
+<h2>Why the consensus is real</h2>
+<p>A validator that always returns <code>True</code> would defeat the purpose. VeriGrant's validator independently re-fetches the evidence and re-runs the judgement, comparing the decision fields (<code>accepted</code>, <code>confidence</code>) rather than free-text reasoning — so it tolerates LLM nondeterminism without letting a rejection flip into an acceptance.</p>
+<div class="grid">
+<div class="card"><h3>Typed state</h3><p>TreeMap storage with <code>@allow_storage</code> dataclasses. No dict/list leakage, deterministic milestone-id counter.</p></div>
+<div class="card"><h3>Role enforcement</h3><p>Owner-only role registration, contributor-only submission, reviewer-only resolution. A submitter can never resolve their own milestone.</p></div>
+<div class="card"><h3>12 direct tests</h3><p>Key isolation, permission guards, self-resolve rejection, validator disagreement, and welfare state on accept/reject.</p></div>
+</div>
+</section>
+
+<section>
+<h2>Reusable primitive</h2>
+<p>Any grant or funding dApp can build on this: the criteria are public, stored onchain, and scored by consensus. Grant programs, bounty platforms, and milestone-based funding all reduce to the same shape — evidence in, judged outcome out, funds released on agreement.</p>
+<p><span class="badge">AI Governance track</span><span class="badge">Agent Tank 2026</span><span class="badge">GenLayer studionet</span></p>
+</section>
+
+<footer>Built for the GenLayer agentic economy · Agent Tank hackathon · <a href="https://github.com/Carlys17/verigrant" style="color:var(--accent)">Carlys17/verigrant</a></footer>
+</div>
+</body>
+</html>
